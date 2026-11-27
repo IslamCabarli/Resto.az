@@ -1,0 +1,981 @@
+openapi: 3.0.3
+info:
+  title: Resto API
+  version: 0.1.0
+  description: |
+    resto.az mobil tətbiqləri üçün API kontraktı (v0 draft). Sahibi: İslam.
+    Qaydalar:
+    - Pul məbləğləri həmişə qəpiklə tam ədəddir (30 AZN = 3000), sahə adları `_minor` ilə bitir.
+    - Mətnlər `Accept-Language` başlığındakı dilə görə qayıdır (az, en, ru).
+    - Siyahı və tək obyekt cavabları `data` içində gəlir.
+    - Xətalar `Error` sxemindədir.
+    - Real-time (restoran paneli): `restaurant.{id}.orders` private WebSocket kanalı (Reverb),
+      hadisələr `OrderCreated` və `OrderStatusChanged`. Bu REST kontraktının hissəsi deyil, sonra əlavə olunacaq.
+    - `/orders/{orderId}/pay` cavabı ödəniş provayderi seçiləndən sonra dəqiqləşəcək.
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Lokal backend
+tags:
+  - name: Auth
+  - name: Restaurants
+  - name: Orders
+  - name: Reviews
+  - name: Profile
+  - name: Staff
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/otp/request:
+    post:
+      tags: [Auth]
+      summary: Telefona SMS kod göndər
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtpRequest'
+      responses:
+        '204':
+          description: Kod göndərildi
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          description: Çox sayda sorğu, bir az sonra yenidən cəhd edin
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /auth/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Kodu təsdiqlə və token al
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OtpVerify'
+      responses:
+        '200':
+          description: Giriş uğurludur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthToken'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /me:
+    get:
+      tags: [Profile]
+      summary: Cari istifadəçi
+      responses:
+        '200':
+          description: İstifadəçi
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    patch:
+      tags: [Profile]
+      summary: Ad və dili yenilə
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: Murad
+                locale:
+                  type: string
+                  enum: [az, en, ru]
+      responses:
+        '200':
+          description: Yenilənmiş istifadəçi
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /restaurants:
+    get:
+      tags: [Restaurants]
+      summary: Restoran axtarışı və siyahısı
+      description: Giriş tələb etmir. Büdcə filtri adambaşı orta büdcəyə görə işləyir.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - name: q
+          in: query
+          description: Restoran və ya yemək adı
+          schema:
+            type: string
+        - name: min_budget_minor
+          in: query
+          description: Adambaşı minimum büdcə (qəpik)
+          schema:
+            type: integer
+            example: 2000
+        - name: max_budget_minor
+          in: query
+          description: Adambaşı maksimum büdcə (qəpik)
+          schema:
+            type: integer
+            example: 5000
+        - name: cuisine
+          in: query
+          description: Mətbəx növü kodu
+          schema:
+            type: string
+            example: azerbaijani
+        - name: has_discount
+          in: query
+          schema:
+            type: boolean
+        - name: lat
+          in: query
+          schema:
+            type: number
+            format: double
+        - name: lng
+          in: query
+          schema:
+            type: number
+            format: double
+        - name: radius_m
+          in: query
+          description: lat və lng ilə birlikdə işləyir
+          schema:
+            type: integer
+            example: 3000
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [distance, rating, price_asc, price_desc]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 50
+      responses:
+        '200':
+          description: Restoranlar
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Restaurant'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+
+  /restaurants/{restaurantId}:
+    get:
+      tags: [Restaurants]
+      summary: Restoran detalları
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          description: Restoran
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Restaurant'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /restaurants/{restaurantId}/menu:
+    get:
+      tags: [Restaurants]
+      summary: Restoran menyusu (endirimlər daxil)
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - $ref: '#/components/parameters/RestaurantId'
+      responses:
+        '200':
+          description: Kateqoriyalar və yeməklər
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MenuCategory'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /restaurants/{restaurantId}/reviews:
+    get:
+      tags: [Reviews]
+      summary: Restoranın rəyləri
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Rəylər
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Review'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+    post:
+      tags: [Reviews]
+      summary: Rəy yaz (yalnız ödənişli sifarişdən sonra)
+      parameters:
+        - $ref: '#/components/parameters/RestaurantId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewCreate'
+      responses:
+        '201':
+          description: Rəy yaradıldı
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Review'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+
+  /tables/resolve:
+    get:
+      tags: [Restaurants]
+      summary: QR tokenindən restoran və masanı tap
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+            example: k9Xp2mQ7
+      responses:
+        '200':
+          description: Masa və restoran
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      restaurant:
+                        $ref: '#/components/schemas/Restaurant'
+                      table:
+                        $ref: '#/components/schemas/Table'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orders:
+    post:
+      tags: [Orders]
+      summary: Sifariş yarat (hələ ödənilməyib)
+      parameters:
+        - $ref: '#/components/parameters/AcceptLanguage'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreate'
+      responses:
+        '201':
+          description: Sifariş yaradıldı
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Order'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+    get:
+      tags: [Orders]
+      summary: Mənim sifarişlərim
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+      responses:
+        '200':
+          description: Sifarişlər
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+                  meta:
+                    $ref: '#/components/schemas/PageMeta'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /orders/{orderId}:
+    get:
+      tags: [Orders]
+      summary: Sifariş və statusu
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: Sifariş
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Order'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /orders/{orderId}/pay:
+    post:
+      tags: [Orders]
+      summary: Ödəniş sessiyası aç
+      description: |
+        `Idempotency-Key` məcburidir: eyni açarla təkrar sorğu yeni ödəniş yaratmır.
+        Ödənişin uğurlu olması yalnız provayderin webhook-u ilə təsdiqlənir;
+        app sifarişin statusunu `GET /orders/{orderId}` ilə izləyir.
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [method]
+              properties:
+                method:
+                  type: string
+                  enum: [apple_pay, google_pay]
+      responses:
+        '200':
+          description: Ödəniş sessiyası
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PaymentSession'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Sifariş artıq ödənilib və ya ödəniş üçün uyğun deyil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /me/coupons:
+    get:
+      tags: [Profile]
+      summary: Mənim kuponlarım
+      responses:
+        '200':
+          description: Kuponlar
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Coupon'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /me/loyalty:
+    get:
+      tags: [Profile]
+      summary: Kupon sayğacı (hər 10 ödənişdən bir kupon)
+      responses:
+        '200':
+          description: Sayğac
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Loyalty'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /staff/orders:
+    get:
+      tags: [Staff]
+      summary: Restoranın sifarişləri (restoran işçisi üçün)
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/OrderStatus'
+      responses:
+        '200':
+          description: Sifarişlər
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Order'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: İstifadəçi restoran işçisi deyil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /staff/orders/{orderId}/status:
+    patch:
+      tags: [Staff]
+      summary: Sifarişin statusunu dəyiş
+      parameters:
+        - $ref: '#/components/parameters/OrderId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [accepted, preparing, ready, served, cancelled]
+      responses:
+        '200':
+          description: Yenilənmiş sifariş
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Order'
+        '403':
+          description: İcazə yoxdur
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Bu status keçidi icazəli deyil
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  parameters:
+    AcceptLanguage:
+      name: Accept-Language
+      in: header
+      description: Cavab dili
+      schema:
+        type: string
+        enum: [az, en, ru]
+        default: az
+    RestaurantId:
+      name: restaurantId
+      in: path
+      required: true
+      schema:
+        type: integer
+        example: 1
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema:
+        type: integer
+        example: 101
+
+  responses:
+    Unauthorized:
+      description: Giriş tələb olunur
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Tapılmadı
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ValidationError:
+      description: Yanlış məlumat
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          example: validation_failed
+        message:
+          type: string
+          example: Telefon nömrəsi yanlışdır
+        errors:
+          type: object
+          description: Sahə üzrə xətalar (varsa)
+          additionalProperties:
+            type: array
+            items:
+              type: string
+
+    PageMeta:
+      type: object
+      properties:
+        page:
+          type: integer
+          example: 1
+        per_page:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 42
+
+    OtpRequest:
+      type: object
+      required: [phone]
+      properties:
+        phone:
+          type: string
+          description: Beynəlxalq formatda
+          example: '+994501234567'
+
+    OtpVerify:
+      type: object
+      required: [phone, code]
+      properties:
+        phone:
+          type: string
+          example: '+994501234567'
+        code:
+          type: string
+          example: '123456'
+        device_name:
+          type: string
+          example: Pixel 8
+
+    AuthToken:
+      type: object
+      properties:
+        token:
+          type: string
+          example: 1|abcdef123456
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 7
+        phone:
+          type: string
+          example: '+994501234567'
+        name:
+          type: string
+          nullable: true
+          example: Murad
+        locale:
+          type: string
+          enum: [az, en, ru]
+          example: az
+        role:
+          type: string
+          enum: [guest, staff, admin]
+          example: guest
+        restaurant_id:
+          type: integer
+          nullable: true
+          description: Yalnız restoran işçisi üçün
+
+    Restaurant:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        slug:
+          type: string
+          example: dolma-house
+        name:
+          type: string
+          example: Dolma House
+        description:
+          type: string
+          example: Ənənəvi Azərbaycan mətbəxi
+        address:
+          type: string
+          example: Nizami küç. 12, Bakı
+        phone:
+          type: string
+          example: '+994125551122'
+        lat:
+          type: number
+          format: double
+          example: 40.3777
+        lng:
+          type: number
+          format: double
+          example: 49.8920
+        cuisines:
+          type: array
+          items:
+            type: string
+          example: [azerbaijani, grill]
+        avg_price_per_person_minor:
+          type: integer
+          description: Menyudan hesablanan adambaşı orta büdcə (qəpik)
+          example: 3500
+        rating:
+          type: number
+          format: float
+          example: 4.6
+        reviews_count:
+          type: integer
+          example: 128
+        has_discounts:
+          type: boolean
+          example: true
+        cover_image_url:
+          type: string
+          example: https://cdn.resto.az/restaurants/1/cover.jpg
+        distance_m:
+          type: integer
+          nullable: true
+          description: Yalnız lat və lng göndərilibsə
+          example: 850
+
+    Table:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 12
+        number:
+          type: integer
+          example: 5
+
+    MenuCategory:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 3
+        name:
+          type: string
+          example: Əsas yeməklər
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MenuItem'
+
+    MenuItem:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 31
+        name:
+          type: string
+          example: Qurzə dolması
+        description:
+          type: string
+          example: Mal ətindən, sarımsaqlı qatıqla
+        price_minor:
+          type: integer
+          example: 1800
+        discount_percent:
+          type: integer
+          nullable: true
+          example: 15
+        discounted_price_minor:
+          type: integer
+          nullable: true
+          example: 1530
+        image_url:
+          type: string
+          nullable: true
+          example: https://cdn.resto.az/menu/31.jpg
+        is_available:
+          type: boolean
+          example: true
+
+    OrderStatus:
+      type: string
+      enum: [created, paid, accepted, preparing, ready, served, cancelled, refunded]
+
+    OrderCreate:
+      type: object
+      required: [table_id, items]
+      properties:
+        table_id:
+          type: integer
+          example: 12
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [menu_item_id, quantity]
+            properties:
+              menu_item_id:
+                type: integer
+                example: 31
+              quantity:
+                type: integer
+                minimum: 1
+                example: 2
+              note:
+                type: string
+                nullable: true
+                example: Soğansız
+        coupon_id:
+          type: integer
+          nullable: true
+
+    OrderItem:
+      type: object
+      properties:
+        menu_item_id:
+          type: integer
+          example: 31
+        name:
+          type: string
+          example: Qurzə dolması
+        quantity:
+          type: integer
+          example: 2
+        unit_price_minor:
+          type: integer
+          description: Sifariş anındakı qiymət (endirimli)
+          example: 1530
+
+    Order:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 101
+        status:
+          $ref: '#/components/schemas/OrderStatus'
+        restaurant_id:
+          type: integer
+          example: 1
+        table:
+          $ref: '#/components/schemas/Table'
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        subtotal_minor:
+          type: integer
+          example: 3600
+        discount_minor:
+          type: integer
+          example: 540
+        coupon_minor:
+          type: integer
+          example: 0
+        total_minor:
+          type: integer
+          example: 3060
+        created_at:
+          type: string
+          format: date-time
+          example: '2027-01-20T18:30:00+04:00'
+
+    PaymentSession:
+      type: object
+      description: Provayder seçiləndən sonra dəqiqləşəcək
+      properties:
+        payment_id:
+          type: integer
+          example: 55
+        method:
+          type: string
+          enum: [apple_pay, google_pay]
+        amount_minor:
+          type: integer
+          example: 3060
+        client_payload:
+          type: object
+          description: Provayderin SDK-sına ötürülən məlumat
+          additionalProperties: true
+
+    ReviewCreate:
+      type: object
+      required: [order_id, rating]
+      properties:
+        order_id:
+          type: integer
+          example: 101
+        rating:
+          type: integer
+          minimum: 1
+          maximum: 5
+          example: 5
+        text:
+          type: string
+          nullable: true
+          example: Çox dadlı idi
+
+    Review:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 9
+        user_name:
+          type: string
+          example: Murad
+        rating:
+          type: integer
+          example: 5
+        text:
+          type: string
+          nullable: true
+          example: Çox dadlı idi
+        created_at:
+          type: string
+          format: date-time
+          example: '2027-01-20T20:10:00+04:00'
+
+    Coupon:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 4
+        amount_minor:
+          type: integer
+          example: 500
+        status:
+          type: string
+          enum: [active, used, expired]
+          example: active
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Loyalty:
+      type: object
+      properties:
+        qualifying_payments_count:
+          type: integer
+          description: Cari dövrdə sayılan ödənişlər
+          example: 7
+        required_payments:
+          type: integer
+          example: 10
+        min_payment_minor:
+          type: integer
+          example: 3000
+        coupon_amount_minor:
+          type: integer
+          example: 500
