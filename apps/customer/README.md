@@ -24,6 +24,17 @@ flutter run -d <android-device-id>
 ```
 
 Start an Android emulator in Android Studio's Device Manager before `flutter run`.
+This machine has a `Resto_API_36` AVD (Pixel 7 / Android 36 / Google APIs).
+Its initial launch failed with `WHPX: Failed to setup partition, hr=80070005`;
+no Android device was available for a runtime smoke test. Resolve the Windows
+hypervisor/access issue with the machine owner, or connect a physical Android
+phone with USB debugging enabled. No Windows security settings were changed.
+
+Flutter 3.50.1 requests NDK `28.2.13676358`. If the first build reports that
+`sdkmanager` cannot install it, select that version under Android Studio >
+SDK Manager > SDK Tools > NDK (Side by side) > Show Package Details. The installed
+Android CLI also supports `android sdk install ndk/28.2.13676358`.
+
 If Flutter is not found on this Windows machine, add `C:\flutter\bin` to your user
 PATH and restart the terminal / VS Code. PowerShell can also run it directly:
 
